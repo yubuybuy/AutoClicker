@@ -1,0 +1,9 @@
+Package: com.example.autoclicker
+Name: AutoClicker
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: 可配置的自动点击工具 - 支持坐标输入、点击次数、频率、时长设置
+Maintainer: gao-huan
+Author: gao-huan
+Section: Tweaks
+Depends: mobilesubstrate (>= 0.9.5000)
