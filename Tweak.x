@@ -1,10 +1,11 @@
 /**
- * AutoClicker V3.3 - 调试增强版
+ * AutoClicker V3.4 - Cell 点击方案
  * 修复：
- * 1. 添加界面调试信息显示
- * 2. 不再需要连接电脑查看日志
- * 3. 直接在界面上显示点击诊断信息
- * 4. 帮助定位点击失败原因
+ * 1. 支持 UITableViewCell 和 UICollectionViewCell 点击
+ * 2. 向上查找父视图，找到包含的 Cell
+ * 3. 触发 didSelectRowAtIndexPath/didSelectItemAtIndexPath
+ * 4. 专门针对电商 APP 商品列表优化
+ * 5. 支持父视图手势识别器
  */
 
 #import <UIKit/UIKit.h>
@@ -125,7 +126,7 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
     titleBar.backgroundColor = [[UIColor orangeColor] colorWithAlphaComponent:0.3];
 
     UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(padding, 0, width - 60, 40)];
-    titleLabel.text = @"🎯 自动点击 V3.3";
+    titleLabel.text = @"🎯 自动点击 V3.4";
     titleLabel.textColor = [UIColor whiteColor];
     titleLabel.font = [UIFont boldSystemFontOfSize:18];
     [titleBar addSubview:titleLabel];
@@ -639,6 +640,101 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
         }
     }
 
+    // ========== 方法5：向上查找父视图，寻找 Cell（关键！）==========
+    // 对于电商 APP，商品图片通常在 Cell 里，需要触发 Cell 的选中
+    UIView *currentView = targetView;
+    while (currentView) {
+        // 检查是否是 UITableViewCell
+        if ([currentView isKindOfClass:[UITableViewCell class]]) {
+            UITableViewCell *cell = (UITableViewCell *)currentView;
+            UITableView *tableView = (UITableView *)cell.superview;
+
+            // 有些 tableView 的 cell 在 superview.superview
+            if (![tableView isKindOfClass:[UITableView class]]) {
+                tableView = (UITableView *)tableView.superview;
+            }
+
+            if ([tableView isKindOfClass:[UITableView class]]) {
+                NSIndexPath *indexPath = [tableView indexPathForCell:cell];
+                if (indexPath && tableView.delegate) {
+                    [self showDebugInfo:[NSString stringWithFormat:@"✅ TableCell: %ld-%ld", (long)indexPath.section, (long)indexPath.row]];
+
+                    // 触发 didSelectRowAtIndexPath
+                    if ([tableView.delegate respondsToSelector:@selector(tableView:didSelectRowAtIndexPath:)]) {
+                        [tableView.delegate tableView:tableView didSelectRowAtIndexPath:indexPath];
+                        return;
+                    }
+                }
+            }
+        }
+
+        // 检查是否是 UICollectionViewCell
+        if ([currentView isKindOfClass:[UICollectionViewCell class]]) {
+            UICollectionViewCell *cell = (UICollectionViewCell *)currentView;
+            UICollectionView *collectionView = (UICollectionView *)cell.superview;
+
+            // 有些 collectionView 的 cell 在 superview.superview
+            if (![collectionView isKindOfClass:[UICollectionView class]]) {
+                collectionView = (UICollectionView *)collectionView.superview;
+            }
+
+            if ([collectionView isKindOfClass:[UICollectionView class]]) {
+                NSIndexPath *indexPath = [collectionView indexPathForCell:cell];
+                if (indexPath && collectionView.delegate) {
+                    [self showDebugInfo:[NSString stringWithFormat:@"✅ CollectionCell: %ld-%ld", (long)indexPath.section, (long)indexPath.item]];
+
+                    // 触发 didSelectItemAtIndexPath
+                    if ([collectionView.delegate respondsToSelector:@selector(collectionView:didSelectItemAtIndexPath:)]) {
+                        [collectionView.delegate collectionView:collectionView didSelectItemAtIndexPath:indexPath];
+                        return;
+                    }
+                }
+            }
+        }
+
+        // 向上查找父视图
+        currentView = currentView.superview;
+    }
+
+    // ========== 方法6：检查父视图的手势识别器 ==========
+    // 有些视图的手势在父视图上
+    currentView = targetView.superview;
+    int depth = 0;
+    while (currentView && depth < 5) {  // 最多向上查找5层
+        if (currentView.gestureRecognizers.count > 0) {
+            for (UIGestureRecognizer *gesture in currentView.gestureRecognizers) {
+                if ([gesture isKindOfClass:[UITapGestureRecognizer class]]) {
+                    UITapGestureRecognizer *tapGesture = (UITapGestureRecognizer *)gesture;
+
+                    if (tapGesture.enabled) {
+                        NSArray *targets = [tapGesture valueForKey:@"_targets"];
+
+                        for (id targetActionPair in targets) {
+                            id target = [targetActionPair valueForKey:@"_target"];
+                            SEL action = NSSelectorFromString([targetActionPair valueForKey:@"_action"]);
+
+                            if (target && action) {
+                                [self showDebugInfo:[NSString stringWithFormat:@"✅ 父视图手势: %@", NSStringFromSelector(action)]];
+
+                                #pragma clang diagnostic push
+                                #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                                if ([target respondsToSelector:action]) {
+                                    [target performSelector:action withObject:tapGesture];
+                                }
+                                #pragma clang diagnostic pop
+
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        currentView = currentView.superview;
+        depth++;
+    }
+
     [self showDebugInfo:[NSString stringWithFormat:@"❌ 无法点击\n类型: %@", viewClass]];
 }
 
@@ -727,7 +823,7 @@ static AutoClickerConfigView *configView = nil;
 
         [self addSubview:floatingButton];
 
-        NSLog(@"[AutoClicker] V3.3 已加载 - 调试增强版");
+        NSLog(@"[AutoClicker] V3.4 已加载 - Cell 点击方案");
     });
 }
 
@@ -760,5 +856,5 @@ static AutoClickerConfigView *configView = nil;
 %end
 
 %ctor {
-    NSLog(@"[AutoClicker] V3.3 已加载 - 调试增强版");
+    NSLog(@"[AutoClicker] V3.4 已加载 - Cell 点击方案");
 }
