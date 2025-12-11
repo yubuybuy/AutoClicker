@@ -1061,8 +1061,8 @@ static AutoClickerConfigView *configView = nil;
             [configView logNetworkRequest:log];
         }
 
-        // 拦截响应
-        return %orig(request, ^(NSData *data, NSURLResponse *response, NSError *error) {
+        // 拦截响应 - 创建包装的 completion handler
+        void (^wrappedHandler)(NSData *, NSURLResponse *, NSError *) = ^(NSData *data, NSURLResponse *response, NSError *error) {
             if (isCouponRelated && data) {
                 NSString *responseString = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
                 if (responseString) {
@@ -1074,7 +1074,9 @@ static AutoClickerConfigView *configView = nil;
             if (completionHandler) {
                 completionHandler(data, response, error);
             }
-        });
+        };
+
+        return %orig(request, wrappedHandler);
     }
 
     return %orig;
