@@ -1,9 +1,10 @@
 /**
- * AutoClicker V3.1 - 修复真实点击
+ * AutoClicker V3.2 - 辅助功能点击方案
  * 修复：
- * 1. 添加真实触摸事件模拟
- * 2. 支持多种点击方式：UIButton、手势识别器、触摸事件
- * 3. 解决"看起来在点击但实际没有效果"的问题
+ * 1. 使用辅助功能框架触发点击
+ * 2. 直接调用 UIControl 的 target-action
+ * 3. 支持 UIAccessibilityActivate
+ * 4. 真正解决点击无效问题
  */
 
 #import <UIKit/UIKit.h>
@@ -122,7 +123,7 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
     titleBar.backgroundColor = [[UIColor orangeColor] colorWithAlphaComponent:0.3];
 
     UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(padding, 0, width - 60, 40)];
-    titleLabel.text = @"🎯 自动点击 V3.1";
+    titleLabel.text = @"🎯 自动点击 V3.2";
     titleLabel.textColor = [UIColor whiteColor];
     titleLabel.font = [UIFont boldSystemFontOfSize:18];
     [titleBar addSubview:titleLabel];
@@ -519,55 +520,115 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
         return;
     }
 
-    // 创建 UITouch 模拟对象（注意：这是简化版本）
-    // 方法1：尝试直接调用 UIButton 的方法
-    if ([targetView isKindOfClass:[UIButton class]]) {
-        UIButton *button = (UIButton *)targetView;
-        [button sendActionsForControlEvents:UIControlEventTouchUpInside];
-        NSLog(@"[AutoClicker] 触发按钮: %@", button.titleLabel.text);
-        return;
+    NSLog(@"[AutoClicker] 找到视图: %@", NSStringFromClass([targetView class]));
+
+    // ========== 方法1：UIControl 及其子类（UIButton, UISwitch 等）==========
+    if ([targetView isKindOfClass:[UIControl class]]) {
+        UIControl *control = (UIControl *)targetView;
+
+        // 获取所有 target-action 对
+        NSSet *allTargets = [control allTargets];
+
+        if (allTargets.count > 0) {
+            for (id target in allTargets) {
+                // 获取该 target 对应的所有 actions
+                NSArray *actions = [control actionsForTarget:target
+                                            forControlEvent:UIControlEventTouchUpInside];
+
+                for (NSString *actionString in actions) {
+                    SEL action = NSSelectorFromString(actionString);
+
+                    NSLog(@"[AutoClicker] 执行 UIControl action: %@ -> %@",
+                          NSStringFromClass([target class]), actionString);
+
+                    // 调用 action
+                    #pragma clang diagnostic push
+                    #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                    if ([target respondsToSelector:action]) {
+                        // 有些 action 需要 sender 参数
+                        NSMethodSignature *signature = [target methodSignatureForSelector:action];
+                        if (signature.numberOfArguments == 2) {
+                            // 只有 self 和 _cmd，无参数
+                            [target performSelector:action];
+                        } else if (signature.numberOfArguments == 3) {
+                            // 有 sender 参数
+                            [target performSelector:action withObject:control];
+                        }
+                    }
+                    #pragma clang diagnostic pop
+                }
+            }
+            return; // 成功执行，返回
+        } else {
+            NSLog(@"[AutoClicker] UIControl 没有绑定 action");
+        }
     }
 
-    // 方法2：查找并触发手势识别器
-    for (UIGestureRecognizer *gesture in targetView.gestureRecognizers) {
-        if ([gesture isKindOfClass:[UITapGestureRecognizer class]]) {
-            UITapGestureRecognizer *tapGesture = (UITapGestureRecognizer *)gesture;
-            if (tapGesture.enabled && tapGesture.state == UIGestureRecognizerStatePossible) {
-                // 触发手势识别器的 action
-                for (id target in [tapGesture valueForKey:@"_targets"]) {
-                    SEL action = NSSelectorFromString(@"action");
-                    if ([target respondsToSelector:action]) {
-                        #pragma clang diagnostic push
-                        #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-                        [target performSelector:action];
-                        #pragma clang diagnostic pop
-                        NSLog(@"[AutoClicker] 触发手势: %@", NSStringFromClass([targetView class]));
-                        return;
+    // ========== 方法2：尝试 UIAccessibility 激活 ==========
+    // 检查视图是否支持辅助功能激活
+    if ([targetView respondsToSelector:@selector(accessibilityActivate)]) {
+        BOOL activated = [targetView accessibilityActivate];
+        if (activated) {
+            NSLog(@"[AutoClicker] 通过 accessibilityActivate 激活成功");
+            return;
+        }
+    }
+
+    // ========== 方法3：手势识别器 ==========
+    if (targetView.gestureRecognizers.count > 0) {
+        for (UIGestureRecognizer *gesture in targetView.gestureRecognizers) {
+            if ([gesture isKindOfClass:[UITapGestureRecognizer class]]) {
+                UITapGestureRecognizer *tapGesture = (UITapGestureRecognizer *)gesture;
+
+                if (tapGesture.enabled) {
+                    // 获取手势的所有 target-action
+                    NSArray *targets = [tapGesture valueForKey:@"_targets"];
+
+                    for (id targetActionPair in targets) {
+                        // 每个元素是 UIGestureRecognizerTarget 对象
+                        id target = [targetActionPair valueForKey:@"_target"];
+                        SEL action = NSSelectorFromString([targetActionPair valueForKey:@"_action"]);
+
+                        if (target && action) {
+                            NSLog(@"[AutoClicker] 执行手势 action: %@ -> %@",
+                                  NSStringFromClass([target class]), NSStringFromSelector(action));
+
+                            #pragma clang diagnostic push
+                            #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+                            if ([target respondsToSelector:action]) {
+                                [target performSelector:action withObject:tapGesture];
+                            }
+                            #pragma clang diagnostic pop
+
+                            return; // 成功执行
+                        }
                     }
                 }
             }
         }
     }
 
-    // 方法3：发送触摸事件到视图层级
-    NSSet *touches = [NSSet set];  // 简化版本，实际需要创建 UITouch 对象
-    UIEvent *event = [[UIEvent alloc] init];
-
-    // 尝试调用 touchesBegan 和 touchesEnded
-    if ([targetView respondsToSelector:@selector(touchesBegan:withEvent:)]) {
-        [targetView touchesBegan:touches withEvent:event];
-
-        // 短暂延迟后发送 touchesEnded
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 0.05 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            if ([targetView respondsToSelector:@selector(touchesEnded:withEvent:)]) {
-                [targetView touchesEnded:touches withEvent:event];
-            }
-        });
-
-        NSLog(@"[AutoClicker] 触发触摸事件: %@", NSStringFromClass([targetView class]));
-    } else {
-        NSLog(@"[AutoClicker] 视图不响应触摸: %@", NSStringFromClass([targetView class]));
+    // ========== 方法4：尝试直接在视图上调用常见的点击方法 ==========
+    // 有些自定义视图会实现这些方法
+    if ([targetView respondsToSelector:@selector(handleTap:)]) {
+        [targetView performSelector:@selector(handleTap:) withObject:nil];
+        NSLog(@"[AutoClicker] 调用 handleTap 成功");
+        return;
     }
+
+    if ([targetView respondsToSelector:@selector(onTap:)]) {
+        [targetView performSelector:@selector(onTap:) withObject:nil];
+        NSLog(@"[AutoClicker] 调用 onTap 成功");
+        return;
+    }
+
+    if ([targetView respondsToSelector:@selector(didTap)]) {
+        [targetView performSelector:@selector(didTap)];
+        NSLog(@"[AutoClicker] 调用 didTap 成功");
+        return;
+    }
+
+    NSLog(@"[AutoClicker] ⚠️ 无法找到可执行的 action，视图类型: %@", NSStringFromClass([targetView class]));
 }
 
 - (void)showAlert:(NSString *)message {
@@ -648,7 +709,7 @@ static AutoClickerConfigView *configView = nil;
 
         [self addSubview:floatingButton];
 
-        NSLog(@"[AutoClicker] V3.1 已加载 - 支持真实触摸事件");
+        NSLog(@"[AutoClicker] V3.2 已加载 - 辅助功能点击方案");
     });
 }
 
@@ -681,5 +742,5 @@ static AutoClickerConfigView *configView = nil;
 %end
 
 %ctor {
-    NSLog(@"[AutoClicker] V3.1 已加载 - 修复真实点击问题");
+    NSLog(@"[AutoClicker] V3.2 已加载 - 辅助功能点击方案");
 }
