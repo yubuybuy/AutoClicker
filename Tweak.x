@@ -1,10 +1,10 @@
 /**
- * AutoClicker V3.2 - 辅助功能点击方案
+ * AutoClicker V3.3 - 调试增强版
  * 修复：
- * 1. 使用辅助功能框架触发点击
- * 2. 直接调用 UIControl 的 target-action
- * 3. 支持 UIAccessibilityActivate
- * 4. 真正解决点击无效问题
+ * 1. 添加界面调试信息显示
+ * 2. 不再需要连接电脑查看日志
+ * 3. 直接在界面上显示点击诊断信息
+ * 4. 帮助定位点击失败原因
  */
 
 #import <UIKit/UIKit.h>
@@ -81,6 +81,7 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
 @property (nonatomic, strong) UISwitch *infiniteSwitch;
 @property (nonatomic, strong) UISwitch *randomSwitch;  // 新增：是否随机
 @property (nonatomic, strong) UILabel *statusLabel;
+@property (nonatomic, strong) UILabel *debugLabel;  // 新增：调试信息
 @property (nonatomic, strong) UIButton *startButton;
 @property (nonatomic, strong) UIButton *stopButton;
 @property (nonatomic, strong) UIButton *captureButton;  // 新增：获取坐标按钮
@@ -95,6 +96,7 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
 
 - (void)show;
 - (void)hide;
+- (void)showDebugInfo:(NSString *)info;  // 新增：显示调试信息
 @end
 
 @implementation AutoClickerConfigView
@@ -123,7 +125,7 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
     titleBar.backgroundColor = [[UIColor orangeColor] colorWithAlphaComponent:0.3];
 
     UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(padding, 0, width - 60, 40)];
-    titleLabel.text = @"🎯 自动点击 V3.2";
+    titleLabel.text = @"🎯 自动点击 V3.3";
     titleLabel.textColor = [UIColor whiteColor];
     titleLabel.font = [UIFont boldSystemFontOfSize:18];
     [titleBar addSubview:titleLabel];
@@ -236,7 +238,18 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
     self.statusLabel.font = [UIFont boldSystemFontOfSize:14];
     self.statusLabel.textAlignment = NSTextAlignmentCenter;
     [self addSubview:self.statusLabel];
-    y += 35;
+    y += 30;
+
+    // 调试信息显示
+    self.debugLabel = [[UILabel alloc] initWithFrame:CGRectMake(padding, y, width, 50)];
+    self.debugLabel.text = @"调试信息";
+    self.debugLabel.textColor = [UIColor yellowColor];
+    self.debugLabel.font = [UIFont systemFontOfSize:10];
+    self.debugLabel.textAlignment = NSTextAlignmentLeft;
+    self.debugLabel.numberOfLines = 3;
+    self.debugLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    [self addSubview:self.debugLabel];
+    y += 55;
 
     // 开始停止按钮
     UIView *buttonView = [[UIView alloc] initWithFrame:CGRectMake(padding, y, width, 40)];
@@ -516,11 +529,12 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
     UIView *targetView = [window hitTest:point withEvent:nil];
 
     if (!targetView) {
-        NSLog(@"[AutoClicker] 未找到目标视图");
+        [self showDebugInfo:@"❌ 未找到目标视图"];
         return;
     }
 
-    NSLog(@"[AutoClicker] 找到视图: %@", NSStringFromClass([targetView class]));
+    NSString *viewClass = NSStringFromClass([targetView class]);
+    [self showDebugInfo:[NSString stringWithFormat:@"🎯 找到: %@", viewClass]];
 
     // ========== 方法1：UIControl 及其子类（UIButton, UISwitch 等）==========
     if ([targetView isKindOfClass:[UIControl class]]) {
@@ -530,6 +544,7 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
         NSSet *allTargets = [control allTargets];
 
         if (allTargets.count > 0) {
+            BOOL executed = NO;
             for (id target in allTargets) {
                 // 获取该 target 对应的所有 actions
                 NSArray *actions = [control actionsForTarget:target
@@ -538,8 +553,7 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
                 for (NSString *actionString in actions) {
                     SEL action = NSSelectorFromString(actionString);
 
-                    NSLog(@"[AutoClicker] 执行 UIControl action: %@ -> %@",
-                          NSStringFromClass([target class]), actionString);
+                    [self showDebugInfo:[NSString stringWithFormat:@"✅ UIControl: %@", actionString]];
 
                     // 调用 action
                     #pragma clang diagnostic push
@@ -554,13 +568,14 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
                             // 有 sender 参数
                             [target performSelector:action withObject:control];
                         }
+                        executed = YES;
                     }
                     #pragma clang diagnostic pop
                 }
             }
-            return; // 成功执行，返回
+            if (executed) return;
         } else {
-            NSLog(@"[AutoClicker] UIControl 没有绑定 action");
+            [self showDebugInfo:[NSString stringWithFormat:@"⚠️ UIControl 无 action"]];
         }
     }
 
@@ -569,8 +584,10 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
     if ([targetView respondsToSelector:@selector(accessibilityActivate)]) {
         BOOL activated = [targetView accessibilityActivate];
         if (activated) {
-            NSLog(@"[AutoClicker] 通过 accessibilityActivate 激活成功");
+            [self showDebugInfo:@"✅ accessibilityActivate"];
             return;
+        } else {
+            [self showDebugInfo:@"⚠️ accessibilityActivate 失败"];
         }
     }
 
@@ -590,8 +607,7 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
                         SEL action = NSSelectorFromString([targetActionPair valueForKey:@"_action"]);
 
                         if (target && action) {
-                            NSLog(@"[AutoClicker] 执行手势 action: %@ -> %@",
-                                  NSStringFromClass([target class]), NSStringFromSelector(action));
+                            [self showDebugInfo:[NSString stringWithFormat:@"✅ 手势: %@", NSStringFromSelector(action)]];
 
                             #pragma clang diagnostic push
                             #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
@@ -606,29 +622,24 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
                 }
             }
         }
+        [self showDebugInfo:@"⚠️ 有手势但无法触发"];
     }
 
     // ========== 方法4：尝试直接在视图上调用常见的点击方法 ==========
-    // 有些自定义视图会实现这些方法
-    if ([targetView respondsToSelector:@selector(handleTap:)]) {
-        [targetView performSelector:@selector(handleTap:) withObject:nil];
-        NSLog(@"[AutoClicker] 调用 handleTap 成功");
-        return;
+    NSArray *commonMethods = @[@"handleTap:", @"onTap:", @"didTap", @"tap", @"onClick:", @"click"];
+    for (NSString *methodName in commonMethods) {
+        SEL method = NSSelectorFromString(methodName);
+        if ([targetView respondsToSelector:method]) {
+            [self showDebugInfo:[NSString stringWithFormat:@"✅ 方法: %@", methodName]];
+            #pragma clang diagnostic push
+            #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+            [targetView performSelector:method withObject:nil];
+            #pragma clang diagnostic pop
+            return;
+        }
     }
 
-    if ([targetView respondsToSelector:@selector(onTap:)]) {
-        [targetView performSelector:@selector(onTap:) withObject:nil];
-        NSLog(@"[AutoClicker] 调用 onTap 成功");
-        return;
-    }
-
-    if ([targetView respondsToSelector:@selector(didTap)]) {
-        [targetView performSelector:@selector(didTap)];
-        NSLog(@"[AutoClicker] 调用 didTap 成功");
-        return;
-    }
-
-    NSLog(@"[AutoClicker] ⚠️ 无法找到可执行的 action，视图类型: %@", NSStringFromClass([targetView class]));
+    [self showDebugInfo:[NSString stringWithFormat:@"❌ 无法点击\n类型: %@", viewClass]];
 }
 
 - (void)showAlert:(NSString *)message {
@@ -655,6 +666,13 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
     }
 }
 
+- (void)showDebugInfo:(NSString *)info {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.debugLabel.text = info;
+        NSLog(@"[AutoClicker] %@", info);
+    });
+}
+
 - (void)dealloc {
     [self stopClicking];
 }
@@ -678,7 +696,7 @@ static AutoClickerConfigView *configView = nil;
 
         // 创建配置窗口（小窗口）
         CGFloat windowWidth = 320;
-        CGFloat windowHeight = 480;  // 增加高度以容纳新功能
+        CGFloat windowHeight = 540;  // 增加高度以容纳调试信息
         CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
         CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
 
@@ -709,7 +727,7 @@ static AutoClickerConfigView *configView = nil;
 
         [self addSubview:floatingButton];
 
-        NSLog(@"[AutoClicker] V3.2 已加载 - 辅助功能点击方案");
+        NSLog(@"[AutoClicker] V3.3 已加载 - 调试增强版");
     });
 }
 
@@ -742,5 +760,5 @@ static AutoClickerConfigView *configView = nil;
 %end
 
 %ctor {
-    NSLog(@"[AutoClicker] V3.2 已加载 - 辅助功能点击方案");
+    NSLog(@"[AutoClicker] V3.3 已加载 - 调试增强版");
 }
