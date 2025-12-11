@@ -1,9 +1,9 @@
 /**
- * AutoClicker V2 - 修复版
- * 改进：
- * 1. 小窗口配置界面（不铺满屏幕）
- * 2. 点击开始后自动隐藏界面
- * 3. 正确点击主应用窗口
+ * AutoClicker V3 - 功能增强版
+ * 新增：
+ * 1. 点击获取坐标功能
+ * 2. 点击范围调节（区域随机点击）
+ * 3. 优化界面布局
  */
 
 #import <UIKit/UIKit.h>
@@ -12,18 +12,77 @@
 // ========== 全局变量 ==========
 static UIWindow *configWindow = nil;
 static UIWindow *mainAppWindow = nil;
+static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
+
+// ========== 透明点击捕获层 ==========
+@interface CoordinateCaptureView : UIView
+@property (nonatomic, copy) void(^onCoordinateCaptured)(CGPoint point);
+@end
+
+@implementation CoordinateCaptureView
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        self.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.3];
+
+        // 添加提示标签
+        UILabel *hintLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 100, frame.size.width, 80)];
+        hintLabel.text = @"📍 点击获取坐标\n\n点击屏幕任意位置\n坐标将自动填入";
+        hintLabel.numberOfLines = 0;
+        hintLabel.textAlignment = NSTextAlignmentCenter;
+        hintLabel.textColor = [UIColor whiteColor];
+        hintLabel.font = [UIFont boldSystemFontOfSize:20];
+        [self addSubview:hintLabel];
+
+        // 添加取消按钮
+        UIButton *cancelButton = [UIButton buttonWithType:UIButtonTypeSystem];
+        cancelButton.frame = CGRectMake((frame.size.width - 100) / 2, frame.size.height - 100, 100, 44);
+        [cancelButton setTitle:@"取消" forState:UIControlStateNormal];
+        [cancelButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        cancelButton.titleLabel.font = [UIFont boldSystemFontOfSize:18];
+        cancelButton.layer.cornerRadius = 8;
+        cancelButton.layer.borderWidth = 2;
+        cancelButton.layer.borderColor = [UIColor whiteColor].CGColor;
+        [cancelButton addTarget:self action:@selector(cancelTapped) forControlEvents:UIControlEventTouchUpInside];
+        [self addSubview:cancelButton];
+    }
+    return self;
+}
+
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    UITouch *touch = [touches anyObject];
+    CGPoint point = [touch locationInView:self];
+
+    if (self.onCoordinateCaptured) {
+        self.onCoordinateCaptured(point);
+    }
+
+    [self removeFromSuperview];
+    isCapturingCoordinate = NO;
+}
+
+- (void)cancelTapped {
+    [self removeFromSuperview];
+    isCapturingCoordinate = NO;
+}
+
+@end
 
 // ========== 小窗口配置界面 ==========
 
 @interface AutoClickerConfigView : UIView <UITextFieldDelegate>
 @property (nonatomic, strong) UITextField *xTextField;
 @property (nonatomic, strong) UITextField *yTextField;
+@property (nonatomic, strong) UITextField *rangeTextField;  // 新增：范围半径
 @property (nonatomic, strong) UITextField *countTextField;
 @property (nonatomic, strong) UITextField *intervalTextField;
 @property (nonatomic, strong) UISwitch *infiniteSwitch;
+@property (nonatomic, strong) UISwitch *randomSwitch;  // 新增：是否随机
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UIButton *startButton;
 @property (nonatomic, strong) UIButton *stopButton;
+@property (nonatomic, strong) UIButton *captureButton;  // 新增：获取坐标按钮
 @property (nonatomic, strong) UIButton *minimizeButton;
 
 @property (nonatomic, strong) NSTimer *clickTimer;
@@ -31,6 +90,7 @@ static UIWindow *mainAppWindow = nil;
 @property (nonatomic, assign) NSInteger totalClicks;
 @property (nonatomic, assign) BOOL isRunning;
 @property (nonatomic, assign) CGPoint clickPoint;
+@property (nonatomic, assign) CGFloat clickRange;  // 新增：点击范围
 
 - (void)show;
 - (void)hide;
@@ -62,12 +122,12 @@ static UIWindow *mainAppWindow = nil;
     titleBar.backgroundColor = [[UIColor orangeColor] colorWithAlphaComponent:0.3];
 
     UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(padding, 0, width - 60, 40)];
-    titleLabel.text = @"🎯 自动点击";
+    titleLabel.text = @"🎯 自动点击 V3";
     titleLabel.textColor = [UIColor whiteColor];
     titleLabel.font = [UIFont boldSystemFontOfSize:18];
     [titleBar addSubview:titleLabel];
 
-    // 最小化按钮
+    // 关闭按钮
     self.minimizeButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.minimizeButton.frame = CGRectMake(self.bounds.size.width - 40, 5, 30, 30);
     [self.minimizeButton setTitle:@"✕" forState:UIControlStateNormal];
@@ -104,6 +164,38 @@ static UIWindow *mainAppWindow = nil;
     [coordView addSubview:self.yTextField];
 
     [self addSubview:coordView];
+    y += 40;
+
+    // 获取坐标按钮
+    self.captureButton = [self createButton:@"📍 点击获取坐标"
+                                       frame:CGRectMake(padding, y, width, 35)
+                                      action:@selector(captureCoordinateTapped)];
+    self.captureButton.backgroundColor = [[UIColor blueColor] colorWithAlphaComponent:0.3];
+    self.captureButton.titleLabel.font = [UIFont systemFontOfSize:14];
+    [self addSubview:self.captureButton];
+    y += 45;
+
+    // 点击范围
+    [self addLabel:@"范围 (0=精确点击):" atY:y];
+    y += 25;
+
+    UIView *rangeView = [[UIView alloc] initWithFrame:CGRectMake(padding, y, width, 35)];
+
+    self.rangeTextField = [self createTextField:CGRectMake(0, 0, width - 120, 30) placeholder:@"0"];
+    [rangeView addSubview:self.rangeTextField];
+
+    UILabel *randomLabel = [[UILabel alloc] initWithFrame:CGRectMake(width - 110, 5, 60, 25)];
+    randomLabel.text = @"随机";
+    randomLabel.textColor = [UIColor whiteColor];
+    randomLabel.font = [UIFont systemFontOfSize:14];
+    [rangeView addSubview:randomLabel];
+
+    self.randomSwitch = [[UISwitch alloc] initWithFrame:CGRectMake(width - 50, 0, 50, 30)];
+    self.randomSwitch.transform = CGAffineTransformMakeScale(0.8, 0.8);
+    [self.randomSwitch addTarget:self action:@selector(randomSwitchChanged:) forControlEvents:UIControlEventValueChanged];
+    [rangeView addSubview:self.randomSwitch];
+
+    [self addSubview:rangeView];
     y += 45;
 
     // 点击次数
@@ -222,6 +314,15 @@ static UIWindow *mainAppWindow = nil;
     }
 }
 
+- (void)randomSwitchChanged:(UISwitch *)sender {
+    self.rangeTextField.enabled = !sender.isOn;
+    if (sender.isOn) {
+        self.rangeTextField.text = @"50";  // 默认随机范围
+    } else {
+        self.rangeTextField.text = @"0";
+    }
+}
+
 - (void)handlePan:(UIPanGestureRecognizer *)gesture {
     CGPoint translation = [gesture translationInView:self.superview];
     CGRect newFrame = self.frame;
@@ -233,6 +334,34 @@ static UIWindow *mainAppWindow = nil;
 
 - (void)minimizeTapped {
     [self hide];
+}
+
+- (void)captureCoordinateTapped {
+    // 隐藏配置窗口
+    [self hide];
+
+    isCapturingCoordinate = YES;
+
+    // 在主窗口上添加捕获层
+    if (mainAppWindow) {
+        CoordinateCaptureView *captureView = [[CoordinateCaptureView alloc] initWithFrame:mainAppWindow.bounds];
+
+        __weak typeof(self) weakSelf = self;
+        captureView.onCoordinateCaptured = ^(CGPoint point) {
+            // 填入坐标
+            weakSelf.xTextField.text = [NSString stringWithFormat:@"%.0f", point.x];
+            weakSelf.yTextField.text = [NSString stringWithFormat:@"%.0f", point.y];
+
+            // 重新显示配置窗口
+            [weakSelf show];
+
+            // 更新状态
+            weakSelf.statusLabel.text = [NSString stringWithFormat:@"已获取: (%.0f, %.0f)", point.x, point.y];
+            weakSelf.statusLabel.textColor = [UIColor cyanColor];
+        };
+
+        [mainAppWindow addSubview:captureView];
+    }
 }
 
 - (void)startClicking {
@@ -253,6 +382,7 @@ static UIWindow *mainAppWindow = nil;
 
     CGFloat x = [self.xTextField.text floatValue];
     CGFloat y = [self.yTextField.text floatValue];
+    CGFloat range = self.rangeTextField.text.length > 0 ? [self.rangeTextField.text floatValue] : 0;
     NSInteger count = self.infiniteSwitch.isOn ? -1 : [self.countTextField.text integerValue];
     CGFloat interval = [self.intervalTextField.text floatValue];
 
@@ -262,6 +392,7 @@ static UIWindow *mainAppWindow = nil;
     }
 
     self.clickPoint = CGPointMake(x, y);
+    self.clickRange = range;
     self.currentClickCount = 0;
     self.totalClicks = count;
     self.isRunning = YES;
@@ -287,7 +418,8 @@ static UIWindow *mainAppWindow = nil;
         }
     }];
 
-    NSLog(@"[AutoClicker] 开始 - 坐标:(%.0f, %.0f) 次数:%ld 间隔:%.1f秒", x, y, (long)count, interval);
+    NSLog(@"[AutoClicker] V3 开始 - 坐标:(%.0f, %.0f) 范围:%.0f 次数:%ld 间隔:%.1f秒",
+          x, y, range, (long)count, interval);
 }
 
 - (void)stopClicking {
@@ -326,21 +458,37 @@ static UIWindow *mainAppWindow = nil;
         return;
     }
 
+    // 计算实际点击位置（如果有范围，则随机偏移）
+    CGPoint actualPoint = self.clickPoint;
+
+    if (self.clickRange > 0) {
+        // 在范围内随机偏移
+        CGFloat randomX = ((CGFloat)arc4random() / UINT32_MAX) * self.clickRange * 2 - self.clickRange;
+        CGFloat randomY = ((CGFloat)arc4random() / UINT32_MAX) * self.clickRange * 2 - self.clickRange;
+
+        actualPoint.x += randomX;
+        actualPoint.y += randomY;
+
+        // 确保不超出屏幕范围
+        actualPoint.x = MAX(0, MIN(actualPoint.x, targetWindow.bounds.size.width));
+        actualPoint.y = MAX(0, MIN(actualPoint.y, targetWindow.bounds.size.height));
+    }
+
     // 在主窗口上查找目标视图
-    UIView *targetView = [targetWindow hitTest:self.clickPoint withEvent:nil];
+    UIView *targetView = [targetWindow hitTest:actualPoint withEvent:nil];
 
     if (targetView) {
         if ([targetView isKindOfClass:[UIButton class]]) {
             UIButton *button = (UIButton *)targetView;
             [button sendActionsForControlEvents:UIControlEventTouchUpInside];
-            NSLog(@"[AutoClicker] 点击按钮: %@", button.titleLabel.text);
+            NSLog(@"[AutoClicker] 点击按钮: %@ at (%.0f, %.0f)", button.titleLabel.text, actualPoint.x, actualPoint.y);
         } else {
-            NSLog(@"[AutoClicker] 点击视图: %@", NSStringFromClass([targetView class]));
+            NSLog(@"[AutoClicker] 点击视图: %@ at (%.0f, %.0f)", NSStringFromClass([targetView class]), actualPoint.x, actualPoint.y);
         }
     }
 
     // 视觉反馈
-    [self showClickFeedbackAtPoint:self.clickPoint inWindow:targetWindow];
+    [self showClickFeedbackAtPoint:actualPoint inWindow:targetWindow];
 
     // 更新状态（如果窗口可见）
     if (configWindow.hidden == NO) {
@@ -417,7 +565,7 @@ static AutoClickerConfigView *configView = nil;
 
         // 创建配置窗口（小窗口）
         CGFloat windowWidth = 320;
-        CGFloat windowHeight = 380;
+        CGFloat windowHeight = 480;  // 增加高度以容纳新功能
         CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
         CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
 
@@ -448,7 +596,7 @@ static AutoClickerConfigView *configView = nil;
 
         [self addSubview:floatingButton];
 
-        NSLog(@"[AutoClicker] 已加载 - 点击 🎯 打开配置");
+        NSLog(@"[AutoClicker] V3 已加载 - 新增功能：点击获取坐标 + 范围调节");
     });
 }
 
@@ -481,5 +629,5 @@ static AutoClickerConfigView *configView = nil;
 %end
 
 %ctor {
-    NSLog(@"[AutoClicker] V2 已加载");
+    NSLog(@"[AutoClicker] V3 已加载 - 点击获取坐标 + 范围随机点击");
 }
