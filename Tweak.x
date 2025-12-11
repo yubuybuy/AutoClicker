@@ -1,10 +1,10 @@
 /**
- * AutoClicker V3.5 - 防闪退优化
+ * AutoClicker V3.6 - 防崩溃加固版
  * 修复：
- * 1. 异步执行 Cell 点击，避免主线程阻塞
- * 2. 显示父视图链，帮助诊断问题
- * 3. 解决快速点击导致闪退的问题
- * 4. 保持 V3.4 的 Cell 点击功能
+ * 1. 添加 try-catch 异常捕获，防止崩溃
+ * 2. 详细的有效性检查（indexPath, delegate）
+ * 3. 显示详细的错误信息帮助诊断
+ * 4. 专门针对百亿补贴等复杂页面优化
  */
 
 #import <UIKit/UIKit.h>
@@ -125,7 +125,7 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
     titleBar.backgroundColor = [[UIColor orangeColor] colorWithAlphaComponent:0.3];
 
     UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(padding, 0, width - 60, 40)];
-    titleLabel.text = @"🎯 自动点击 V3.5";
+    titleLabel.text = @"🎯 自动点击 V3.6";
     titleLabel.textColor = [UIColor whiteColor];
     titleLabel.font = [UIFont boldSystemFontOfSize:18];
     [titleBar addSubview:titleLabel];
@@ -655,17 +655,47 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
 
             if ([tableView isKindOfClass:[UITableView class]]) {
                 NSIndexPath *indexPath = [tableView indexPathForCell:cell];
-                if (indexPath && tableView.delegate) {
-                    [self showDebugInfo:[NSString stringWithFormat:@"✅ TableCell: %ld-%ld", (long)indexPath.section, (long)indexPath.row]];
 
-                    // 异步触发，避免阻塞主线程导致闪退
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        if ([tableView.delegate respondsToSelector:@selector(tableView:didSelectRowAtIndexPath:)]) {
-                            [tableView.delegate tableView:tableView didSelectRowAtIndexPath:indexPath];
-                        }
-                    });
-                    return;
+                if (!indexPath) {
+                    [self showDebugInfo:@"⚠️ indexPath 为空"];
+                    currentView = currentView.superview;
+                    continue;
                 }
+
+                if (!tableView.delegate) {
+                    [self showDebugInfo:@"⚠️ delegate 为空"];
+                    currentView = currentView.superview;
+                    continue;
+                }
+
+                // 检查 delegate 是否响应该方法
+                if (![tableView.delegate respondsToSelector:@selector(tableView:didSelectRowAtIndexPath:)]) {
+                    [self showDebugInfo:@"⚠️ delegate 不响应 didSelect"];
+                    currentView = currentView.superview;
+                    continue;
+                }
+
+                [self showDebugInfo:[NSString stringWithFormat:@"🔵 尝试 Cell: %ld-%ld", (long)indexPath.section, (long)indexPath.row]];
+
+                // 使用 try-catch 保护，避免崩溃
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    @try {
+                        // 再次检查有效性（异步执行时可能已经改变）
+                        if (tableView.delegate && indexPath) {
+                            [tableView.delegate tableView:tableView didSelectRowAtIndexPath:indexPath];
+
+                            dispatch_async(dispatch_get_main_queue(), ^{
+                                [self showDebugInfo:@"✅ Cell 点击成功"];
+                            });
+                        }
+                    } @catch (NSException *exception) {
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            [self showDebugInfo:[NSString stringWithFormat:@"❌ 异常: %@", exception.name]];
+                        });
+                        NSLog(@"[AutoClicker] 捕获异常: %@ - %@", exception.name, exception.reason);
+                    }
+                });
+                return;
             }
         }
 
@@ -681,17 +711,47 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
 
             if ([collectionView isKindOfClass:[UICollectionView class]]) {
                 NSIndexPath *indexPath = [collectionView indexPathForCell:cell];
-                if (indexPath && collectionView.delegate) {
-                    [self showDebugInfo:[NSString stringWithFormat:@"✅ CollectionCell: %ld-%ld", (long)indexPath.section, (long)indexPath.item]];
 
-                    // 异步触发，避免阻塞主线程导致闪退
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        if ([collectionView.delegate respondsToSelector:@selector(collectionView:didSelectItemAtIndexPath:)]) {
-                            [collectionView.delegate collectionView:collectionView didSelectItemAtIndexPath:indexPath];
-                        }
-                    });
-                    return;
+                if (!indexPath) {
+                    [self showDebugInfo:@"⚠️ indexPath 为空"];
+                    currentView = currentView.superview;
+                    continue;
                 }
+
+                if (!collectionView.delegate) {
+                    [self showDebugInfo:@"⚠️ delegate 为空"];
+                    currentView = currentView.superview;
+                    continue;
+                }
+
+                // 检查 delegate 是否响应该方法
+                if (![collectionView.delegate respondsToSelector:@selector(collectionView:didSelectItemAtIndexPath:)]) {
+                    [self showDebugInfo:@"⚠️ delegate 不响应 didSelect"];
+                    currentView = currentView.superview;
+                    continue;
+                }
+
+                [self showDebugInfo:[NSString stringWithFormat:@"🔵 尝试 Cell: %ld-%ld", (long)indexPath.section, (long)indexPath.item]];
+
+                // 使用 try-catch 保护，避免崩溃
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    @try {
+                        // 再次检查有效性（异步执行时可能已经改变）
+                        if (collectionView.delegate && indexPath) {
+                            [collectionView.delegate collectionView:collectionView didSelectItemAtIndexPath:indexPath];
+
+                            dispatch_async(dispatch_get_main_queue(), ^{
+                                [self showDebugInfo:@"✅ Cell 点击成功"];
+                            });
+                        }
+                    } @catch (NSException *exception) {
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            [self showDebugInfo:[NSString stringWithFormat:@"❌ 异常: %@", exception.name]];
+                        });
+                        NSLog(@"[AutoClicker] 捕获异常: %@ - %@", exception.name, exception.reason);
+                    }
+                });
+                return;
             }
         }
 
@@ -836,7 +896,7 @@ static AutoClickerConfigView *configView = nil;
 
         [self addSubview:floatingButton];
 
-        NSLog(@"[AutoClicker] V3.5 已加载 - 防闪退优化");
+        NSLog(@"[AutoClicker] V3.6 已加载 - 防崩溃加固版");
     });
 }
 
@@ -869,5 +929,5 @@ static AutoClickerConfigView *configView = nil;
 %end
 
 %ctor {
-    NSLog(@"[AutoClicker] V3.5 已加载 - 防闪退优化");
+    NSLog(@"[AutoClicker] V3.6 已加载 - 防崩溃加固版");
 }
