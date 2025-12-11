@@ -1,10 +1,11 @@
 /**
- * AutoClicker V3.6 - 防崩溃加固版
- * 修复：
- * 1. 添加 try-catch 异常捕获，防止崩溃
- * 2. 详细的有效性检查（indexPath, delegate）
- * 3. 显示详细的错误信息帮助诊断
- * 4. 专门针对百亿补贴等复杂页面优化
+ * AutoClicker V3.7 - 网络拦截版
+ * 新增：
+ * 1. Hook NSURLSession 拦截所有网络请求
+ * 2. 实时显示领券相关请求（URL、Headers、Body）
+ * 3. 显示响应数据
+ * 4. 绕过 SSL Pinning（在 APP 内部拦截）
+ * 5. 为抢券功能做准备
  */
 
 #import <UIKit/UIKit.h>
@@ -80,12 +81,15 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
 @property (nonatomic, strong) UITextField *intervalTextField;
 @property (nonatomic, strong) UISwitch *infiniteSwitch;
 @property (nonatomic, strong) UISwitch *randomSwitch;  // 新增：是否随机
+@property (nonatomic, strong) UISwitch *networkMonitorSwitch;  // 新增：网络监控开关
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) UILabel *debugLabel;  // 新增：调试信息
+@property (nonatomic, strong) UITextView *networkLogView;  // 新增：网络日志显示
 @property (nonatomic, strong) UIButton *startButton;
 @property (nonatomic, strong) UIButton *stopButton;
 @property (nonatomic, strong) UIButton *captureButton;  // 新增：获取坐标按钮
 @property (nonatomic, strong) UIButton *minimizeButton;
+@property (nonatomic, strong) UIButton *clearLogButton;  // 新增：清空日志按钮
 
 @property (nonatomic, strong) NSTimer *clickTimer;
 @property (nonatomic, assign) NSInteger currentClickCount;
@@ -97,6 +101,7 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
 - (void)show;
 - (void)hide;
 - (void)showDebugInfo:(NSString *)info;  // 新增：显示调试信息
+- (void)logNetworkRequest:(NSString *)log;  // 新增：记录网络请求
 @end
 
 @implementation AutoClickerConfigView
@@ -125,7 +130,7 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
     titleBar.backgroundColor = [[UIColor orangeColor] colorWithAlphaComponent:0.3];
 
     UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(padding, 0, width - 60, 40)];
-    titleLabel.text = @"🎯 自动点击 V3.6";
+    titleLabel.text = @"🎯 自动点击 V3.7";
     titleLabel.textColor = [UIColor whiteColor];
     titleLabel.font = [UIFont boldSystemFontOfSize:18];
     [titleBar addSubview:titleLabel];
@@ -250,6 +255,48 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
     self.debugLabel.lineBreakMode = NSLineBreakByTruncatingTail;
     [self addSubview:self.debugLabel];
     y += 55;
+
+    // 网络监控开关
+    [self addLabel:@"🌐 网络监控（抓包）:" atY:y];
+    y += 25;
+
+    UIView *networkMonitorView = [[UIView alloc] initWithFrame:CGRectMake(padding, y, width, 35)];
+
+    UILabel *monitorLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 5, width - 70, 25)];
+    monitorLabel.text = @"开启后会拦截所有网络请求";
+    monitorLabel.textColor = [UIColor cyanColor];
+    monitorLabel.font = [UIFont systemFontOfSize:11];
+    [networkMonitorView addSubview:monitorLabel];
+
+    self.networkMonitorSwitch = [[UISwitch alloc] initWithFrame:CGRectMake(width - 50, 0, 50, 30)];
+    self.networkMonitorSwitch.transform = CGAffineTransformMakeScale(0.8, 0.8);
+    [self.networkMonitorSwitch addTarget:self action:@selector(networkMonitorSwitchChanged:) forControlEvents:UIControlEventValueChanged];
+    [networkMonitorView addSubview:self.networkMonitorSwitch];
+
+    [self addSubview:networkMonitorView];
+    y += 40;
+
+    // 网络日志显示区域
+    self.networkLogView = [[UITextView alloc] initWithFrame:CGRectMake(padding, y, width, 120)];
+    self.networkLogView.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.5];
+    self.networkLogView.textColor = [UIColor greenColor];
+    self.networkLogView.font = [UIFont fontWithName:@"Menlo" size:9];
+    self.networkLogView.editable = NO;
+    self.networkLogView.layer.cornerRadius = 5;
+    self.networkLogView.layer.borderWidth = 1;
+    self.networkLogView.layer.borderColor = [UIColor cyanColor].CGColor;
+    self.networkLogView.text = @"[网络监控]\n等待拦截请求...\n\n提示：\n1. 打开开关\n2. 手动领券\n3. 查看请求信息";
+    [self addSubview:self.networkLogView];
+    y += 125;
+
+    // 清空日志按钮
+    self.clearLogButton = [self createButton:@"清空日志"
+                                       frame:CGRectMake(padding, y, width, 30)
+                                      action:@selector(clearNetworkLog)];
+    self.clearLogButton.backgroundColor = [[UIColor purpleColor] colorWithAlphaComponent:0.3];
+    self.clearLogButton.titleLabel.font = [UIFont systemFontOfSize:14];
+    [self addSubview:self.clearLogButton];
+    y += 40;
 
     // 开始停止按钮
     UIView *buttonView = [[UIView alloc] initWithFrame:CGRectMake(padding, y, width, 40)];
@@ -842,6 +889,45 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
     });
 }
 
+- (void)networkMonitorSwitchChanged:(UISwitch *)sender {
+    if (sender.isOn) {
+        [self logNetworkRequest:@"[网络监控] 已开启\n正在拦截所有网络请求...\n"];
+        NSLog(@"[AutoClicker] 网络监控已开启");
+    } else {
+        [self logNetworkRequest:@"[网络监控] 已关闭"];
+        NSLog(@"[AutoClicker] 网络监控已关闭");
+    }
+}
+
+- (void)clearNetworkLog {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.networkLogView.text = @"[日志已清空]\n等待拦截新的请求...\n";
+    });
+}
+
+- (void)logNetworkRequest:(NSString *)log {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSString *timestamp = [NSString stringWithFormat:@"[%@] ", [[NSDate date] descriptionWithLocale:nil]];
+        NSString *newLog = [NSString stringWithFormat:@"%@%@\n", timestamp, log];
+
+        // 限制日志长度，避免占用太多内存
+        NSString *currentLog = self.networkLogView.text;
+        if (currentLog.length > 10000) {
+            currentLog = [currentLog substringFromIndex:currentLog.length - 5000];
+        }
+
+        self.networkLogView.text = [currentLog stringByAppendingString:newLog];
+
+        // 自动滚动到底部
+        if (self.networkLogView.text.length > 0) {
+            NSRange bottom = NSMakeRange(self.networkLogView.text.length - 1, 1);
+            [self.networkLogView scrollRangeToVisible:bottom];
+        }
+
+        NSLog(@"[AutoClicker-Network] %@", log);
+    });
+}
+
 - (void)dealloc {
     [self stopClicking];
 }
@@ -865,7 +951,7 @@ static AutoClickerConfigView *configView = nil;
 
         // 创建配置窗口（小窗口）
         CGFloat windowWidth = 320;
-        CGFloat windowHeight = 540;  // 增加高度以容纳调试信息
+        CGFloat windowHeight = 760;  // 增加高度以容纳网络监控
         CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
         CGFloat screenHeight = [UIScreen mainScreen].bounds.size.height;
 
@@ -928,6 +1014,91 @@ static AutoClickerConfigView *configView = nil;
 
 %end
 
+// ========== 网络请求拦截 ==========
+
+%hook NSURLSession
+
+- (NSURLSessionDataTask *)dataTaskWithRequest:(NSURLRequest *)request completionHandler:(void (^)(NSData *, NSURLResponse *, NSError *))completionHandler {
+    // 检查是否开启网络监控
+    if (configView && configView.networkMonitorSwitch.isOn) {
+        NSString *url = request.URL.absoluteString;
+        NSString *method = request.HTTPMethod ?: @"GET";
+
+        // 过滤领券相关请求
+        BOOL isCouponRelated = [url containsString:@"coupon"] ||
+                                [url containsString:@"领券"] ||
+                                [url containsString:@"receive"] ||
+                                [url containsString:@"claim"];
+
+        if (isCouponRelated) {
+            // 构建详细日志
+            NSMutableString *log = [NSMutableString string];
+            [log appendFormat:@"🔥 [领券请求]\n"];
+            [log appendFormat:@"Method: %@\n", method];
+            [log appendFormat:@"URL: %@\n", url];
+
+            // Headers
+            if (request.allHTTPHeaderFields.count > 0) {
+                [log appendString:@"\nHeaders:\n"];
+                for (NSString *key in request.allHTTPHeaderFields) {
+                    [log appendFormat:@"  %@: %@\n", key, request.allHTTPHeaderFields[key]];
+                }
+            }
+
+            // Body
+            if (request.HTTPBody) {
+                NSString *bodyString = [[NSString alloc] initWithData:request.HTTPBody encoding:NSUTF8StringEncoding];
+                if (bodyString) {
+                    [log appendFormat:@"\nBody:\n%@\n", bodyString];
+                } else {
+                    [log appendFormat:@"\nBody: (二进制数据 %lu bytes)\n", (unsigned long)request.HTTPBody.length];
+                }
+            }
+
+            [log appendString:@"════════════════\n"];
+
+            // 显示在界面上
+            [configView logNetworkRequest:log];
+        }
+
+        // 拦截响应
+        return %orig(request, ^(NSData *data, NSURLResponse *response, NSError *error) {
+            if (isCouponRelated && data) {
+                NSString *responseString = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+                if (responseString) {
+                    [configView logNetworkRequest:[NSString stringWithFormat:@"📥 [响应]\n%@\n════════════════\n", responseString]];
+                }
+            }
+
+            // 调用原始回调
+            if (completionHandler) {
+                completionHandler(data, response, error);
+            }
+        });
+    }
+
+    return %orig;
+}
+
+%end
+
+%hook NSURLConnection
+
++ (NSData *)sendSynchronousRequest:(NSURLRequest *)request returningResponse:(NSURLResponse **)response error:(NSError **)error {
+    // 检查是否开启网络监控
+    if (configView && configView.networkMonitorSwitch.isOn) {
+        NSString *url = request.URL.absoluteString;
+
+        if ([url containsString:@"coupon"] || [url containsString:@"receive"]) {
+            [configView logNetworkRequest:[NSString stringWithFormat:@"🔄 [同步请求] %@\n", url]];
+        }
+    }
+
+    return %orig;
+}
+
+%end
+
 %ctor {
-    NSLog(@"[AutoClicker] V3.6 已加载 - 防崩溃加固版");
+    NSLog(@"[AutoClicker] V3.7 已加载 - 网络拦截版");
 }
