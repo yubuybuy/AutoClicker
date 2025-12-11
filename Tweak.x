@@ -537,7 +537,7 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
             UITapGestureRecognizer *tapGesture = (UITapGestureRecognizer *)gesture;
             if (tapGesture.enabled && tapGesture.state == UIGestureRecognizerStatePossible) {
                 // 触发手势识别器的 action
-                for (id target in tapGesture.valueForKey:@"_targets"]) {
+                for (id target in [tapGesture valueForKey:@"_targets"]) {
                     SEL action = NSSelectorFromString(@"action");
                     if ([target respondsToSelector:action]) {
                         #pragma clang diagnostic push
