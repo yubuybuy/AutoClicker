@@ -1,11 +1,10 @@
 /**
- * AutoClicker V3.4 - Cell 点击方案
+ * AutoClicker V3.5 - 防闪退优化
  * 修复：
- * 1. 支持 UITableViewCell 和 UICollectionViewCell 点击
- * 2. 向上查找父视图，找到包含的 Cell
- * 3. 触发 didSelectRowAtIndexPath/didSelectItemAtIndexPath
- * 4. 专门针对电商 APP 商品列表优化
- * 5. 支持父视图手势识别器
+ * 1. 异步执行 Cell 点击，避免主线程阻塞
+ * 2. 显示父视图链，帮助诊断问题
+ * 3. 解决快速点击导致闪退的问题
+ * 4. 保持 V3.4 的 Cell 点击功能
  */
 
 #import <UIKit/UIKit.h>
@@ -126,7 +125,7 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
     titleBar.backgroundColor = [[UIColor orangeColor] colorWithAlphaComponent:0.3];
 
     UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(padding, 0, width - 60, 40)];
-    titleLabel.text = @"🎯 自动点击 V3.4";
+    titleLabel.text = @"🎯 自动点击 V3.5";
     titleLabel.textColor = [UIColor whiteColor];
     titleLabel.font = [UIFont boldSystemFontOfSize:18];
     [titleBar addSubview:titleLabel];
@@ -659,11 +658,13 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
                 if (indexPath && tableView.delegate) {
                     [self showDebugInfo:[NSString stringWithFormat:@"✅ TableCell: %ld-%ld", (long)indexPath.section, (long)indexPath.row]];
 
-                    // 触发 didSelectRowAtIndexPath
-                    if ([tableView.delegate respondsToSelector:@selector(tableView:didSelectRowAtIndexPath:)]) {
-                        [tableView.delegate tableView:tableView didSelectRowAtIndexPath:indexPath];
-                        return;
-                    }
+                    // 异步触发，避免阻塞主线程导致闪退
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        if ([tableView.delegate respondsToSelector:@selector(tableView:didSelectRowAtIndexPath:)]) {
+                            [tableView.delegate tableView:tableView didSelectRowAtIndexPath:indexPath];
+                        }
+                    });
+                    return;
                 }
             }
         }
@@ -683,11 +684,13 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
                 if (indexPath && collectionView.delegate) {
                     [self showDebugInfo:[NSString stringWithFormat:@"✅ CollectionCell: %ld-%ld", (long)indexPath.section, (long)indexPath.item]];
 
-                    // 触发 didSelectItemAtIndexPath
-                    if ([collectionView.delegate respondsToSelector:@selector(collectionView:didSelectItemAtIndexPath:)]) {
-                        [collectionView.delegate collectionView:collectionView didSelectItemAtIndexPath:indexPath];
-                        return;
-                    }
+                    // 异步触发，避免阻塞主线程导致闪退
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        if ([collectionView.delegate respondsToSelector:@selector(collectionView:didSelectItemAtIndexPath:)]) {
+                            [collectionView.delegate collectionView:collectionView didSelectItemAtIndexPath:indexPath];
+                        }
+                    });
+                    return;
                 }
             }
         }
@@ -735,7 +738,17 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
         depth++;
     }
 
-    [self showDebugInfo:[NSString stringWithFormat:@"❌ 无法点击\n类型: %@", viewClass]];
+    // ========== 最终失败：显示父视图链帮助诊断 ==========
+    NSMutableString *parentChain = [NSMutableString stringWithString:viewClass];
+    UIView *parent = targetView.superview;
+    int chainDepth = 0;
+    while (parent && chainDepth < 3) {
+        [parentChain appendFormat:@"\n↑ %@", NSStringFromClass([parent class])];
+        parent = parent.superview;
+        chainDepth++;
+    }
+
+    [self showDebugInfo:[NSString stringWithFormat:@"❌ 无法点击\n%@", parentChain]];
 }
 
 - (void)showAlert:(NSString *)message {
@@ -823,7 +836,7 @@ static AutoClickerConfigView *configView = nil;
 
         [self addSubview:floatingButton];
 
-        NSLog(@"[AutoClicker] V3.4 已加载 - Cell 点击方案");
+        NSLog(@"[AutoClicker] V3.5 已加载 - 防闪退优化");
     });
 }
 
@@ -856,5 +869,5 @@ static AutoClickerConfigView *configView = nil;
 %end
 
 %ctor {
-    NSLog(@"[AutoClicker] V3.4 已加载 - Cell 点击方案");
+    NSLog(@"[AutoClicker] V3.5 已加载 - 防闪退优化");
 }
