@@ -20,8 +20,14 @@ jobs:
     - name: Build Package
       run: make package
 
-    - name: Upload Artifact
+    - name: Upload DEB Package
       uses: actions/upload-artifact@v4
       with:
         name: AutoClicker-DEB
         path: packages/*.deb
+
+    - name: Upload DYLIB (for direct injection)
+      uses: actions/upload-artifact@v4
+      with:
+        name: AutoClicker-DYLIB
+        path: .theos/obj/debug/*.dylib
