@@ -519,9 +519,6 @@ static BOOL isCapturingCoordinate = NO; // 是否正在获取坐标模式
         return;
     }
 
-    // 将坐标转换到目标视图的坐标系
-    CGPoint localPoint = [window convertPoint:point toView:targetView];
-
     // 创建 UITouch 模拟对象（注意：这是简化版本）
     // 方法1：尝试直接调用 UIButton 的方法
     if ([targetView isKindOfClass:[UIButton class]]) {
